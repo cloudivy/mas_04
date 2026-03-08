@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Multi-Agent Framework</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #070709; --surface: #0d0d12; --border: #1c1c26;
+  --amber: #f59e0b; --cyan: #06b6d4; --green: #10b981;
+  --purple: #8b5cf6; --red: #ef4444;
+  --text: #c8c8d8; --muted: #44445a; --dim: #22222e;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-ui: 'DM Sans', sans-serif;
+  --font-display: 'Orbitron', monospace;
+}
+html, body, #root { height: 100%; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-ui); overflow-x: hidden; }
+::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 2px; }
+
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.1)} }
+@keyframes slide-up { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+@keyframes spin { to{transform:rotate(360deg)} }
+@keyframes flow-dash { to{stroke-dashoffset:-16} }
+@keyframes glow-pulse { 0%,100%{box-shadow:0 0 12px currentColor} 50%{box-shadow:0 0 28px currentColor,0 0 60px currentColor} }
+@keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+
+.animate-in { animation: slide-up .3s ease forwards; }
+.spin { animation: spin 1s linear infinite; }
+.pulse-dot { animation: pulse 1.2s ease-in-out infinite; }
+.flow-active { animation: flow-dash .4s linear infinite; }
+
+.tab { background: none; border: none; cursor: pointer; font-family: var(--font-mono); font-size: 11px; letter-spacing: 2px; padding: 8px 16px; border-bottom: 2px solid transparent; color: var(--muted); transition: all .2s; }
+.tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+.tab:hover:not(.active) { color: var(--text); }
+
+.btn-primary { background: linear-gradient(135deg, #f59e0b22, #f59e0b11); border: 1px solid #f59e0b55; color: var(--amber); font-family: var(--font-display); font-size: 12px; font-weight: 700; letter-spacing: 3px; padding: 13px 28px; border-radius: 6px; cursor: pointer; transition: all .3s; width: 100%; }
+.btn-primary:hover:not(:disabled) { box-shadow: 0 0 30px #f59e0b33; border-color: #f59e0baa; }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.btn-ghost { background: none; border: 1px solid var(--border); color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; padding: 7px 14px; border-radius: 4px; cursor: pointer; transition: all .2s; }
+.btn-ghost:hover { color: var(--text); border-color: #33334a; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.card-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.card-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 2px; }
+
+input, textarea { background: transparent; border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--font-mono); font-size: 12px; outline: none; padding: 9px 12px; transition: border-color .2s; width: 100%; }
+input:focus, textarea:focus { border-color: #f59e0b55; }
+textarea { resize: vertical; line-height: 1.6; min-height: 80px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ── Config ────────────────────────────────────────────────────────────────────
+const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+  ? "http://localhost:8000"
+  : ""; // same-origin when deployed
+
+const AGENT_META = {
+  orchestrator: { name:"Orchestrator", icon:"◈", color:"#f59e0b", role:"Decomposes tasks and delegates" },
+  researcher:   { name:"Researcher",   icon:"⬡", color:"#06b6d4", role:"Gathers context and constraints" },
+  planner:      { name:"Planner",      icon:"◎", color:"#10b981", role:"Creates execution roadmap" },
+  executor:     { name:"Executor",     icon:"▣", color:"#8b5cf6", role:"Implements the plan" },
+  critic:       { name:"Critic",       icon:"◬", color:"#ef4444", role:"Reviews output quality" },
+};
+const PIPELINE = ["orchestrator","researcher","planner","executor","critic"];
+
+// ── Simulated responses (demo mode) ──────────────────────────────────────────
+const SIM = {
+  orchestrator: t => `Task received: "${t.slice(0,60)}"\n\nDecomposition:\n1. [RESEARCH] Gather domain context and constraints\n2. [PLAN] Design step-by-step execution approach\n3. [EXECUTE] Implement and produce deliverable\n4. [CRITIC] Review output quality and flag gaps\n\nDelegating to specialist pipeline →`,
+  researcher:   t => `Research complete for: "${t.slice(0,50)}"\n\nFindings:\n• Domain context mapped — key frameworks identified\n• Constraints: scope, resources, and timelines noted\n• 4 reference points collected\n• Risk factors: 2 potential blockers flagged\n\nPassing to PLANNER →`,
+  planner:      t => `Execution roadmap for: "${t.slice(0,50)}"\n\nPhase 1 — Initialization (2 steps)\nPhase 2 — Core Logic (4 steps, parallel-capable)\nPhase 3 — Validation (2 steps)\n\nDependencies resolved. Critical path: Phase 1 → Phase 2A → Phase 3\n\nHanding off to EXECUTOR →`,
+  executor:     t => `Execution report:\n\n✓ Phase 1: Environment configured\n✓ Phase 2: Core implementation complete — 6/6 steps done\n✓ Phase 3: Output validated — 3/3 checks passed\n\nDeliverables produced. Quality score pre-review: 82/100.\nRequesting CRITIC review →`,
+  critic:       t => `Review complete:\n\n⊕ Strengths: Clear structure, addresses core requirements\n⊕ Coverage: 89% of task requirements met\n⊖ Gaps: Edge case handling in Phase 2 could be improved\n⊖ Suggestion: Add error recovery logic\n\nFinal Score: 87/100\nVerdict: APPROVED with minor refinements suggested.`,
+};
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const r = await fetch(API_BASE + path, {
+    headers: {"Content-Type":"application/json"},
+    ...opts,
+  });
+  if (!r.ok) throw new Error(`API ${r.status}`);
+  return r.json();
+}
+
+// ── Demo pipeline runner ──────────────────────────────────────────────────────
+async function runDemo(task, onStep) {
+  const results = [];
+  let context = "";
+  for (const agentId of PIPELINE) {
+    onStep(agentId, "active");
+    await new Promise(r => setTimeout(r, 700 + Math.random() * 600));
+    const output = SIM[agentId](task);
+    context += `\n[${AGENT_META[agentId].name}]\n${output}`;
+    results.push({ agent_id: agentId, agent_name: AGENT_META[agentId].name, output, elapsed_s: 0.4 + Math.random() * 0.8, success: true, mode: "simulated", metrics: { asi: 88 + Math.random()*10, response_consistency: 90, reasoning_stability: 85, task_adherence: 92, latency_stability: 87 } });
+    onStep(agentId, "done");
+  }
+  return { run_id: "demo-" + Date.now(), task, status: "complete", mode: "sequential", pipeline: PIPELINE, results, elapsed_s: 4.2 };
+}
+
+// ── Components ────────────────────────────────────────────────────────────────
+
+function AgentBubble({ agentId, status }) {
+  const a = AGENT_META[agentId];
+  const isActive = status === "active";
+  const isDone = status === "done";
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+      <div style={{
+        width:52, height:52, borderRadius:"50%",
+        border:`2px solid ${status==="idle" ? "#1c1c26" : a.color}`,
+        background: isActive ? `radial-gradient(${a.color}33,transparent)` : isDone ? `${a.color}15` : "#0d0d12",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        fontSize:20, color: status==="idle" ? "#2a2a3a" : a.color,
+        boxShadow: isActive ? `0 0 24px ${a.color}66` : isDone ? `0 0 8px ${a.color}33` : "none",
+        transition:"all .4s ease", position:"relative",
+        animation: isActive ? "glow-pulse 1.2s ease-in-out infinite" : "none",
+      }}>
+        {a.icon}
+        {isDone && <div style={{position:"absolute",bottom:-2,right:-2,width:14,height:14,borderRadius:"50%",background:"#10b981",border:"2px solid #0d0d12",fontSize:7,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff"}}>✓</div>}
+      </div>
+      <span style={{fontFamily:"var(--font-mono)",fontSize:8,color:status==="idle"?"#2a2a3a":a.color,letterSpacing:1.5}}>{a.name.slice(0,8)}</span>
+    </div>
+  );
+}
+
+function DAGConnector({ fromId, toId, statuses }) {
+  const from = AGENT_META[fromId];
+  const isActive = statuses[fromId]==="active" || statuses[fromId]==="done";
+  return (
+    <svg width={48} height={52} style={{flexShrink:0}}>
+      <line x1={0} y1={26} x2={48} y2={26}
+        stroke={isActive ? from.color : "#1c1c26"}
+        strokeWidth={isActive ? 1.5 : 1}
+        strokeDasharray={statuses[fromId]==="active" ? "4 4" : "none"}
+        className={statuses[fromId]==="active" ? "flow-active" : ""}
+      />
+      {isActive && <polygon points="42,22 48,26 42,30" fill={from.color}/>}
+    </svg>
+  );
+}
+
+function AgentPipeline({ statuses }) {
+  return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 0",overflowX:"auto"}}>
+      {PIPELINE.map((id, i) => (
+        <React.Fragment key={id}>
+          <AgentBubble agentId={id} status={statuses[id]}/>
+          {i < PIPELINE.length-1 && <DAGConnector fromId={id} toId={PIPELINE[i+1]} statuses={statuses}/>}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function MessageFeed({ results }) {
+  const ref = useRef(null);
+  useEffect(() => { if(ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [results]);
+  if (!results.length) return (
+    <div style={{padding:32,textAlign:"center",color:"var(--muted)",fontFamily:"var(--font-mono)",fontSize:11}}>
+      [ NO RUNS YET — SUBMIT A TASK TO BEGIN ]
+    </div>
+  );
+  return (
+    <div ref={ref} style={{overflowY:"auto",maxHeight:420,display:"flex",flexDirection:"column",gap:12,padding:16}}>
+      {results.map((r, i) => {
+        const a = AGENT_META[r.agent_id] || {name:r.agent_id,icon:"◎",color:"#888"};
+        return (
+          <div key={i} className="animate-in" style={{borderLeft:`2px solid ${a.color}`,paddingLeft:12}}>
+            <div style={{display:"flex",gap:8,marginBottom:4,alignItems:"center"}}>
+              <span style={{color:a.color,fontFamily:"var(--font-mono)",fontSize:10,letterSpacing:2}}>{a.icon} {a.name}</span>
+              <span style={{color:"var(--muted)",fontSize:9,fontFamily:"var(--font-mono)"}}>
+                {r.mode==="simulated"?"[SIM]":"[API]"} · {r.elapsed_s?.toFixed(2)}s
+                {r.metrics?.asi && ` · ASI ${r.metrics.asi.toFixed(0)}`}
+              </span>
+            </div>
+            <pre style={{fontFamily:"var(--font-mono)",fontSize:11,color:"#b0b0c8",whiteSpace:"pre-wrap",lineHeight:1.7}}>{r.output}</pre>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MetricsPanel({ runs }) {
+  if (!runs.length) return <div style={{padding:32,textAlign:"center",color:"var(--muted)",fontFamily:"var(--font-mono)",fontSize:11}}>[ NO RUN DATA YET ]</div>;
+
+  const lastRun = runs[runs.length-1];
+  const allResults = runs.flatMap(r => r.results||[]);
+
+  // Per-agent ASI
+  const perAgent = {};
+  allResults.forEach(r => {
+    if (!perAgent[r.agent_id]) perAgent[r.agent_id] = [];
+    if (r.metrics?.asi) perAgent[r.agent_id].push(r.metrics.asi);
+  });
+
+  const barColor = v => v >= 80 ? "#10b981" : v >= 60 ? "#f59e0b" : "#ef4444";
+
+  return (
+    <div style={{padding:16,display:"flex",flexDirection:"column",gap:20}}>
+      {/* Summary row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        {[
+          {label:"TOTAL RUNS", value:runs.length, color:"var(--amber)"},
+          {label:"AVG ELAPSED", value:runs.length ? (runs.reduce((s,r)=>s+(r.elapsed_s||0),0)/runs.length).toFixed(1)+"s" : "—", color:"var(--cyan)"},
+          {label:"API CALLS", value:allResults.filter(r=>r.mode==="api").length, color:"var(--purple)"},
+          {label:"SIM CALLS", value:allResults.filter(r=>r.mode==="simulated").length, color:"var(--green)"},
+        ].map(s=>(
+          <div key={s.label} style={{background:"var(--dim)",borderRadius:6,padding:"12px",textAlign:"center"}}>
+            <div style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--muted)",letterSpacing:1,marginBottom:4}}>{s.label}</div>
+            <div style={{fontFamily:"var(--font-display)",fontSize:18,color:s.color,fontWeight:700}}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ASI per agent */}
+      <div>
+        <div style={{fontFamily:"var(--font-mono)",fontSize:10,color:"var(--muted)",letterSpacing:2,marginBottom:12}}>AGENT STABILITY INDEX (ASI) BY AGENT</div>
+        {PIPELINE.map(id => {
+          const scores = perAgent[id] || [];
+          const avg = scores.length ? scores.reduce((a,b)=>a+b,0)/scores.length : null;
+          const a = AGENT_META[id];
+          return (
+            <div key={id} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontFamily:"var(--font-mono)",fontSize:10,color:a.color}}>{a.icon} {a.name}</span>
+                <span style={{fontFamily:"var(--font-mono)",fontSize:10,color:avg?barColor(avg):"var(--muted)"}}>{avg?avg.toFixed(1):"—"}</span>
+              </div>
+              <div style={{background:"var(--dim)",borderRadius:4,height:6,overflow:"hidden"}}>
+                {avg && <div style={{height:"100%",width:`${avg}%`,background:barColor(avg),borderRadius:4,transition:"width 1s ease"}}/>}
+              </div>
+              <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
+                {scores.slice(-8).map((s,i)=>(
+                  <div key={i} style={{width:6,height:6,borderRadius:"50%",background:barColor(s)}} title={s.toFixed(1)}/>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Last run detail */}
+      {lastRun && (
+        <div>
+          <div style={{fontFamily:"var(--font-mono)",fontSize:10,color:"var(--muted)",letterSpacing:2,marginBottom:10}}>LAST RUN BREAKDOWN</div>
+          {(lastRun.results||[]).map((r,i) => {
+            const a = AGENT_META[r.agent_id]||{color:"#888"};
+            const scores = r.metrics||{};
+            const dims = ["response_consistency","reasoning_stability","task_adherence","latency_stability"];
+            return (
+              <div key={i} style={{marginBottom:12,padding:12,background:"var(--dim)",borderRadius:6,borderLeft:`2px solid ${a.color}`}}>
+                <div style={{fontFamily:"var(--font-mono)",fontSize:10,color:a.color,marginBottom:8,letterSpacing:1}}>
+                  {AGENT_META[r.agent_id]?.icon} {r.agent_name} · ASI {scores.asi?.toFixed(1)||"—"}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:6}}>
+                  {dims.map(d => (
+                    <div key={d} style={{display:"flex",justifyContent:"space-between",fontSize:9,fontFamily:"var(--font-mono)"}}>
+                      <span style={{color:"var(--muted)"}}>{d.replace(/_/g," ").toUpperCase().slice(0,18)}</span>
+                      <span style={{color:scores[d]?barColor(scores[d]):"var(--muted)"}}>{scores[d]?.toFixed(0)||"—"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MemoryPanel({ apiConnected }) {
+  const [memories, setMemories] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  const loadMemories = async () => {
+    if (!apiConnected) return;
+    setLoading(true);
+    try {
+      const all = {};
+      for (const id of PIPELINE) {
+        const data = await apiFetch(`/memory/${id}`);
+        all[id] = data.memories || {};
+      }
+      setMemories(all);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { if(apiConnected) loadMemories(); }, [apiConnected]);
+
+  if (!apiConnected) return (
+    <div style={{padding:32,textAlign:"center",color:"var(--muted)",fontFamily:"var(--font-mono)",fontSize:11}}>
+      [ CONNECT API BACKEND TO VIEW MEMORIES ]
+    </div>
+  );
+
+  return (
+    <div style={{padding:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+        <span style={{fontFamily:"var(--font-mono)",fontSize:10,color:"var(--muted)",letterSpacing:2}}>AGENT MEMORY STORES</span>
+        <button className="btn-ghost" onClick={loadMemories}>{loading?"LOADING...":"REFRESH"}</button>
+      </div>
+      {PIPELINE.map(id => {
+        const a = AGENT_META[id];
+        const entries = Object.entries(memories[id]||{});
+        return (
+          <div key={id} style={{marginBottom:12,border:"1px solid var(--border)",borderRadius:6,overflow:"hidden"}}>
+            <div style={{padding:"8px 12px",background:"var(--dim)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{color:a.color,fontFamily:"var(--font-mono)",fontSize:10,letterSpacing:1}}>{a.icon} {a.name}</span>
+              <span style={{color:"var(--muted)",fontSize:9,fontFamily:"var(--font-mono)"}}>{entries.length} entries</span>
+            </div>
+            {entries.length > 0 ? entries.slice(-3).map(([k,v])=>(
+              <div key={k} style={{padding:"8px 12px",borderTop:"1px solid var(--border)"}}>
+                <div style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--muted)",marginBottom:2}}>{k}</div>
+                <div style={{fontFamily:"var(--font-mono)",fontSize:10,color:"var(--text)"}}>{String(v.value||v).slice(0,120)}...</div>
+              </div>
+            )) : <div style={{padding:12,fontFamily:"var(--font-mono)",fontSize:10,color:"var(--muted)"}}>No memories yet</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RAGPanel({ apiConnected }) {
+  const [docs, setDocs] = useState([]);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const load = async () => {
+    if (!apiConnected) return;
+    try { const d = await apiFetch("/rag/list"); setDocs(d.documents||[]); } catch {}
+  };
+  useEffect(() => { if(apiConnected) load(); }, [apiConnected]);
+
+  const addDoc = async () => {
+    if (!title.trim() || !content.trim()) return;
+    setAdding(true);
+    try {
+      await apiFetch("/rag/add", { method:"POST", body: JSON.stringify({title, content}) });
+      setTitle(""); setContent("");
+      await load();
+    } catch {}
+    setAdding(false);
+  };
+
+  const deleteDoc = async (id) => {
+    try { await apiFetch(`/rag/${id}`, {method:"DELETE"}); await load(); } catch {}
+  };
+
+  if (!apiConnected) return (
+    <div style={{padding:32,textAlign:"center",color:"var(--muted)",fontFamily:"var(--font-mono)",fontSize:11}}>
+      [ CONNECT API BACKEND TO MANAGE RAG DOCUMENTS ]
+    </div>
+  );
+
+  return (
+    <div style={{padding:16,display:"flex",flexDirection:"column",gap:16}}>
+      <div className="card" style={{border:"none",background:"var(--dim)"}}>
+        <div style={{padding:"12px 16px",borderBottom:"1px solid var(--border)"}}>
+          <span style={{fontFamily:"var(--font-mono)",fontSize:10,color:"var(--cyan)",letterSpacing:2}}>⬡ ADD DOCUMENT</span>
+        </div>
+        <div style={{padding:12,display:"flex",flexDirection:"column",gap:8}}>
+          <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Document title..."/>
+          <textarea value={content} onChange={e=>setContent(e.target.value)} placeholder="Document content (will be retrieved during agent runs)..." style={{minHeight:80}}/>
+          <button className="btn-ghost" onClick={addDoc} disabled={adding || !title || !content}>
+            {adding ? "ADDING..." : "+ ADD TO RAG STORE"}
+          </button>
+        </div>
+      </div>
+      <div>
+        <div style={{fontFamily:"var(--font-mono)",fontSize:10,color:"var(--muted)",letterSpacing:2,marginBottom:10}}>
+          STORED DOCUMENTS ({docs.length})
+        </div>
+        {docs.length === 0 && <div style={{fontFamily:"var(--font-mono)",fontSize:11,color:"var(--muted)"}}>No documents yet.</div>}
+        {docs.map(d=>(
+          <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:"var(--dim)",borderRadius:6,marginBottom:6}}>
+            <div>
+              <div style={{fontFamily:"var(--font-mono)",fontSize:11,color:"var(--text)"}}>{d.title}</div>
+              <div style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--muted)",marginTop:2}}>id: {d.id}</div>
+            </div>
+            <button className="btn-ghost" onClick={()=>deleteDoc(d.id)} style={{color:"var(--red)",borderColor:"#ef444433"}}>DEL</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [task, setTask] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiBase, setApiBase] = useState(API_BASE || "http://localhost:8000");
+  const [showKey, setShowKey] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [tab, setTab] = useState("run");
+  const [runs, setRuns] = useState([]);
+  const [currentResults, setCurrentResults] = useState([]);
+  const [statuses, setStatuses] = useState(Object.fromEntries(PIPELINE.map(id=>[id,"idle"])));
+  const [apiConnected, setApiConnected] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef(null);
+
+  // Check API connectivity
+  useEffect(() => {
+    fetch(apiBase + "/").then(r => { if(r.ok) setApiConnected(true); }).catch(()=>setApiConnected(false));
+  }, [apiBase]);
+
+  const resetStatuses = () => setStatuses(Object.fromEntries(PIPELINE.map(id=>[id,"idle"])));
+
+  const execute = useCallback(async () => {
+    if (!task.trim() || running) return;
+    setRunning(true); setCurrentResults([]); resetStatuses();
+    setElapsed(0);
+    const startT = Date.now();
+    timerRef.current = setInterval(()=>setElapsed(Math.floor((Date.now()-startT)/1000)), 400);
+
+    try {
+      let runData;
+      if (apiConnected) {
+        // Real API run
+        setStatuses(prev => {
+          const s = {...prev}; s[PIPELINE[0]] = "active"; return s;
+        });
+        runData = await apiFetch(apiBase.replace(/\/$/, "") + "/run", {
+          method: "POST",
+          body: JSON.stringify({ task, api_key: apiKey, simulate: !apiKey }),
+        });
+        // Animate results as they come in
+        for (const r of runData.results || []) {
+          setStatuses(prev => { const s={...prev}; s[r.agent_id]="done"; return s; });
+          setCurrentResults(prev => [...prev, r]);
+          await new Promise(res => setTimeout(res, 200));
+        }
+      } else {
+        // Demo mode
+        runData = await runDemo(task, (agentId, status) => {
+          setStatuses(prev => { const s={...prev}; s[agentId]=status; return s; });
+          if (status === "done") {
+            const result = { agent_id: agentId, agent_name: AGENT_META[agentId].name, output: SIM[agentId](task), elapsed_s: 0.6, success: true, mode: "simulated", metrics: { asi: 85+Math.random()*12, response_consistency:90, reasoning_stability:85, task_adherence:88, latency_stability:82 } };
+            setCurrentResults(prev => [...prev, result]);
+          }
+        });
+      }
+      setRuns(prev => [...prev, runData]);
+    } catch (e) {
+      console.error(e);
+    }
+
+    clearInterval(timerRef.current);
+    setRunning(false);
+  }, [task, apiKey, apiConnected, running]);
+
+  const SAMPLES = [
+    "Design a microservices architecture for an e-commerce platform",
+    "Build a context drift detection system for LLM agents",
+    "Create an anomaly detection pipeline for industrial sensor data",
+    "Develop a recommendation engine for a content platform",
+  ];
+
+  return (
+    <div style={{minHeight:"100vh",background:"var(--bg)",position:"relative"}}>
+      {/* Grid bg */}
+      <div style={{position:"fixed",inset:0,pointerEvents:"none",backgroundImage:"linear-gradient(rgba(245,158,11,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(245,158,11,.025) 1px,transparent 1px)",backgroundSize:"44px 44px",zIndex:0}}/>
+      <div style={{position:"fixed",inset:0,pointerEvents:"none",background:"repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.02) 2px,rgba(0,0,0,.02) 4px)",zIndex:0}}/>
+
+      <div style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"0 16px 60px"}}>
+
+        {/* Header */}
+        <div style={{padding:"24px 0 20px",borderBottom:"1px solid var(--border)",marginBottom:24}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+            <div>
+              <h1 style={{fontFamily:"var(--font-display)",fontSize:20,fontWeight:900,letterSpacing:4,
+                background:"linear-gradient(90deg,#f59e0b,#fde68a,#f59e0b)",backgroundSize:"200% auto",
+                WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",animation:"shimmer 2.5s linear infinite"}}>
+                MULTI-AGENT FRAMEWORK
+              </h1>
+              <div style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--muted)",letterSpacing:2,marginTop:3}}>
+                SEQUENTIAL → HIERARCHICAL · MEMORY · RAG · TOOLS · EVAL
+              </div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <div className={apiConnected?"pulse-dot":""} style={{width:6,height:6,borderRadius:"50%",background:apiConnected?"#10b981":"#444"}}/>
+                <span style={{fontFamily:"var(--font-mono)",fontSize:9,color:apiConnected?"#10b981":"var(--muted)",letterSpacing:1}}>
+                  {apiConnected?"API CONNECTED":"DEMO MODE"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 340px",gap:20,alignItems:"start"}}>
+
+          {/* Left */}
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+            {/* Input card */}
+            <div className="card">
+              <div className="card-header">
+                <span className="card-label" style={{color:"var(--amber)"}}>◈ TASK INPUT</span>
+                {running && <span style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--amber)",marginLeft:"auto"}}>RUNNING · {elapsed}s</span>}
+              </div>
+              <div style={{padding:14,display:"flex",flexDirection:"column",gap:10}}>
+                <textarea value={task} onChange={e=>setTask(e.target.value)} placeholder="Describe your task... e.g. 'Build a recommendation engine'" disabled={running}/>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {SAMPLES.map((s,i)=>(
+                    <button key={i} className="btn-ghost" onClick={()=>setTask(s)} disabled={running}
+                      style={{fontSize:9,padding:"4px 8px",letterSpacing:.5}}>
+                      {s.slice(0,36)}…
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* API config */}
+            <div className="card">
+              <div className="card-header">
+                <span className="card-label" style={{color:"var(--cyan)"}}>⬡ API CONFIG</span>
+                <span style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--muted)",marginLeft:8}}>— OPTIONAL: leave blank for demo mode</span>
+              </div>
+              <div style={{padding:14,display:"flex",flexDirection:"column",gap:8}}>
+                <div style={{display:"flex",gap:6}}>
+                  <input style={{flex:1}} value={apiBase} onChange={e=>setApiBase(e.target.value)} placeholder="Backend URL e.g. http://localhost:8000"/>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <input style={{flex:1}} type={showKey?"text":"password"} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="OpenAI API key sk-... (optional)"/>
+                  <button className="btn-ghost" onClick={()=>setShowKey(!showKey)}>{showKey?"HIDE":"SHOW"}</button>
+                </div>
+              </div>
+            </div>
+
+            {/* Execute */}
+            <button className="btn-primary" onClick={execute} disabled={running||!task.trim()}>
+              {running ? `⟳ PROCESSING · ${elapsed}s` : "► EXECUTE PIPELINE"}
+            </button>
+
+            {/* Pipeline DAG */}
+            <div className="card">
+              <div className="card-header"><span className="card-label" style={{color:"var(--green)"}}>◎ PIPELINE DAG</span></div>
+              <AgentPipeline statuses={statuses}/>
+            </div>
+
+            {/* Tabs + content */}
+            <div className="card">
+              <div style={{borderBottom:"1px solid var(--border)",display:"flex"}}>
+                {[["run","AGENT OUTPUT"],["metrics","METRICS"],["memory","MEMORY"],["rag","RAG DOCS"]].map(([id,label])=>(
+                  <button key={id} className={`tab ${tab===id?"active":""}`} onClick={()=>setTab(id)}>{label}</button>
+                ))}
+              </div>
+              {tab === "run" && <MessageFeed results={currentResults}/>}
+              {tab === "metrics" && <div style={{maxHeight:500,overflowY:"auto"}}><MetricsPanel runs={runs}/></div>}
+              {tab === "memory" && <div style={{maxHeight:500,overflowY:"auto"}}><MemoryPanel apiConnected={apiConnected}/></div>}
+              {tab === "rag" && <div style={{maxHeight:500,overflowY:"auto"}}><RAGPanel apiConnected={apiConnected}/></div>}
+            </div>
+          </div>
+
+          {/* Right sidebar */}
+          <div style={{display:"flex",flexDirection:"column",gap:16,position:"sticky",top:16}}>
+
+            {/* Agent roster */}
+            <div className="card">
+              <div className="card-header"><span className="card-label" style={{color:"var(--purple)"}}>▣ AGENT ROSTER</span></div>
+              <div style={{padding:12}}>
+                {PIPELINE.map(id => {
+                  const a = AGENT_META[id];
+                  const s = statuses[id];
+                  return (
+                    <div key={id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 4px",borderBottom:"1px solid var(--border)"}}>
+                      <span style={{color:s==="idle"?"var(--muted)":a.color,fontSize:16}}>{a.icon}</span>
+                      <div style={{flex:1}}>
+                        <div style={{fontFamily:"var(--font-mono)",fontSize:10,color:s==="idle"?"var(--muted)":a.color,letterSpacing:1}}>{a.name}</div>
+                        <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.4,marginTop:1}}>{a.role}</div>
+                      </div>
+                      <div style={{fontFamily:"var(--font-mono)",fontSize:8,letterSpacing:1,
+                        color:s==="done"?"#10b981":s==="active"?a.color:"var(--muted)"}}>
+                        {s.toUpperCase()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Quick stats */}
+            <div className="card">
+              <div className="card-header"><span className="card-label" style={{color:"var(--cyan)"}}>◎ SESSION STATS</span></div>
+              <div style={{padding:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {[
+                  ["RUNS", runs.length, "var(--amber)"],
+                  ["AGENTS", PIPELINE.length, "var(--cyan)"],
+                  ["LAST ELAPSED", runs.length ? (runs[runs.length-1]?.elapsed_s||0).toFixed(1)+"s" : "—", "var(--green)"],
+                  ["MODE", apiConnected ? "LIVE" : "DEMO", apiConnected ? "var(--green)" : "var(--purple)"],
+                ].map(([k,v,c]) => (
+                  <div key={k} style={{background:"var(--dim)",borderRadius:4,padding:10,textAlign:"center"}}>
+                    <div style={{fontFamily:"var(--font-mono)",fontSize:8,color:"var(--muted)",letterSpacing:1,marginBottom:4}}>{k}</div>
+                    <div style={{fontFamily:"var(--font-display)",fontSize:16,color:c,fontWeight:700}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* How to extend */}
+            <div className="card">
+              <div className="card-header"><span className="card-label" style={{color:"var(--muted)"}}>◈ EXTEND</span></div>
+              <div style={{padding:12,display:"flex",flexDirection:"column",gap:8}}>
+                {[
+                  ["+ NEW AGENT", "agents/builtin/my_agent.py", "var(--amber)"],
+                  ["+ NEW TOOL", "tools/tool_registry.py", "var(--cyan)"],
+                  ["+ RAG DOCS", "POST /rag/add", "var(--green)"],
+                  ["+ EVAL METRIC", "eval/agent_metrics.py", "var(--purple)"],
+                ].map(([action, file, c]) => (
+                  <div key={action} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 8px",background:"var(--dim)",borderRadius:4}}>
+                    <span style={{fontFamily:"var(--font-mono)",fontSize:9,color:c,letterSpacing:1}}>{action}</span>
+                    <span style={{fontFamily:"var(--font-mono)",fontSize:8,color:"var(--muted)"}}>{file}</span>
+                  </div>
+                ))}
+                <div style={{fontFamily:"var(--font-mono)",fontSize:9,color:"var(--muted)",lineHeight:1.7,marginTop:4,padding:"8px",background:"var(--dim)",borderRadius:4}}>
+                  Add agents: subclass BaseAgent<br/>
+                  Edit registry.py → auto-available<br/>
+                  Toggle hierarchical in pipeline.py
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
